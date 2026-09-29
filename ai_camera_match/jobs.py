@@ -49,14 +49,20 @@ def process_env(cache_dir: Path, offline: bool = False) -> dict[str, str]:
 def install_steps(
     base_python: str, env_dir: Path, torch_index: str
 ) -> list[tuple[str, list[str]]]:
-    """(label, command) pairs that build the solver virtual environment."""
+    """(label, command) pairs that build or update the solver virtual environment.
+
+    An existing environment is never re-created: running venv over it with a different base
+    Python swaps its interpreter and breaks the compiled packages already installed there.
+    """
     python = str(env_python(env_dir))
     pip = [python, "-m", "pip", "install", "--disable-pip-version-check"]
     torch = pip + ["torch", "torchvision"]
     if TORCH_INDEXES[torch_index]:
         torch += ["--index-url", TORCH_INDEXES[torch_index]]
-    return [
-        ("Creating virtual environment", [base_python, "-m", "venv", str(env_dir)]),
+    steps = []
+    if not env_python(env_dir).exists():
+        steps.append(("Creating virtual environment", [base_python, "-m", "venv", str(env_dir)]))
+    return steps + [
         ("Upgrading pip", pip + ["--upgrade", "pip"]),
         ("Installing PyTorch (large download)", torch),
         (

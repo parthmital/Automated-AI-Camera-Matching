@@ -2,6 +2,8 @@
 .venv/
 .agent-local/
 .cache/
+# Solver cache created when the solver environment is placed in the repository root
+/cache/
 
 # Python
 __pycache__/
@@ -10,3 +12,4 @@ __pycache__/
 
 # Build output
 dist/
+*.zip

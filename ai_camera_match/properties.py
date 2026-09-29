@@ -117,7 +117,11 @@ class AICM_Preferences(bpy.types.AddonPreferences):
                 icon="CHECKMARK" if self.env_ready() else "ERROR",
             )
             box.label(text="Needs about 6 GB of disk and an internet connection.")
-            box.operator("aicm.install_environment", icon="IMPORT")
+            box.operator(
+                "aicm.install_environment",
+                icon="IMPORT",
+                text=f"{'Update' if self.env_ready() else 'Install'} Solver Environment",
+            )
             if wm.aicm_status:
                 box.label(text=wm.aicm_status)
 

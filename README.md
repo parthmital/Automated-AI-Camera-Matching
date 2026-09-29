@@ -139,13 +139,13 @@ bpy.ops.wm.save_as_mainfile(filepath="photo_matched.blend")
 
 ## Output Files
 
-| File                | Contents                                                                                                                                                                                                                                            |
-| :------------------ | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `solution.json`     | Image size; focal length, FoV and distortion; roll, pitch, up vector and GeoCalib uncertainties in degrees; Blender `matrix_world`; camera height and its source (`ground_plane` or `default`); floor fit details; models used; run time; warnings. |
-| `plate.png`         | The analysed image: EXIF orientation applied and, for distorted lenses, undistorted. Used as the camera background.                                                                                                                                 |
-| `proxy_mesh.glb`    | Textured mesh of the MoGe point map in Blender world space (glTF Y-up; Blender's importer converts it).                                                                                                                                             |
-| `<image name>.fspy` | fSpy project for the [fSpy-Blender](https://github.com/stuffmatic/fSpy-Blender) importer and other `.fspy` readers. It holds no vanishing points, so opening it in the fSpy app itself is not supported.                                            |
-| `solve.log`         | Full solver output, written when solving from Blender.                                                                                                                                                                                              |
+| File                | Contents                                                                                                                                                                                                                                                                                    |
+| :------------------ | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `solution.json`     | Image size; focal length, FoV and distortion; roll, pitch, up vector and GeoCalib uncertainties in degrees; Blender `matrix_world`; camera height and its source (`ground_plane` or `default`); floor fit details; models used; run time; warnings.                                         |
+| `plate.png`         | The analysed image: EXIF orientation applied and, for distorted lenses, undistorted. Used as the camera background.                                                                                                                                                                         |
+| `proxy_mesh.glb`    | Textured mesh of the MoGe point map in Blender world space (glTF Y-up; Blender's importer converts it).                                                                                                                                                                                     |
+| `<image name>.fspy` | fSpy project for the [fSpy-Blender](https://github.com/stuffmatic/fSpy-Blender) importer and other `.fspy` readers. It holds no vanishing points, so opening it in the fSpy app itself is not supported.                                                                                    |
+| `solve.log`         | Written when solving from Blender: timestamped steps, the settings and device used, a result summary (lens, roll and pitch with uncertainty, height, warnings, files, time) and, on failure, the full traceback. Installs write a matching `logs/install.log` in the extension user folder. |
 
 ## Measured Results
 
@@ -191,6 +191,7 @@ Accuracy against ground-truth cameras is not measured in the current repository.
 |           |-- geometry.py          Rotation, FoV and floor fitting (NumPy only)
 |           `-- fspy.py              .fspy project writer
 |-- tests/test_geometry.py          Unit tests for geometry.py and fspy.py
+|-- tests/test_jobs.py              Unit tests for the job runner's log, progress and error handling
 |-- Automated AI Camera Matching.md  Research survey behind the design
 `-- LICENSE                          GPL-3.0-or-later
 ```
@@ -205,7 +206,7 @@ python -m venv .venv
 .venv/Scripts/python -m pytest tests
 ```
 
-Expected result: `13 passed`.
+Expected result: `20 passed`.
 
 Validate the extension manifest:
 
@@ -228,7 +229,7 @@ To work on the solver outside Blender, install PyTorch and then the two requirem
 | "Enable ... Allow Online Access first"                         | Blender's online access is off                                    | Preferences > System > Network                       | Turn on Allow Online Access and retry.                                           |
 | Install fails at "Installing PyTorch"                          | No wheel for this Python or platform on the chosen index          | Read `logs/install.log` in the extension user folder | Pick another PyTorch Build, or set Base Python to a Python 3.10 to 3.13 install. |
 | "Install the solver environment ... first"                     | The environment's Python was not found                            | Preferences show "not installed"                     | Run Install Solver Environment, or point Solver Environment to an existing one.  |
-| Solve fails with `CUDA out of memory`                          | GPU memory too small for the model                                | `solve.log` in the solve folder                      | Choose MoGe-2 ViT-S or ViT-B, or lower Depth Resolution.                         |
+| "The GPU ran out of memory"                                    | GPU memory too small for the model                                | `solve.log` in the solve folder                      | Choose MoGe-2 ViT-S or ViT-B, or lower Depth Resolution.                         |
 | Solve fails offline                                            | Weights not downloaded yet and online access is off               | `solve.log`                                          | Allow online access for the first solve.                                         |
 | Warning "No floor found below the camera"                      | No upward-facing surface below the camera (sky, close-up, aerial) | `solution.json` `height_source` is `default`         | Set Fallback Height to the known height, or scale the scene by a known object.   |
 | Warning "The fitted floor is N degrees off GeoCalib's horizon" | GeoCalib and MoGe disagree, or a tabletop or slope was picked     | Look at the floor grid over the plate                | Try another lens model, or trust the horizon and adjust the height by hand.      |

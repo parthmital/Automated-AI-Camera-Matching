@@ -4,7 +4,8 @@ Run from the Blender add-on or directly:
 
     python -m aicm_worker --image photo.jpg --out-dir solve/
 
-Progress is streamed to stdout as JSON lines ({"progress": 0.4, "message": "..."}).
+Progress is streamed to stdout as JSON lines ({"progress": 0.4, "message": "..."}); a failure
+ends with {"error": "..."}. Readable details (setup, results, tracebacks) go to stderr.
 The solution is written to <out-dir>/solution.json.
 """
 
@@ -12,8 +13,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
+import os
 import sys
 import time
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -27,12 +31,42 @@ from .geometry import (
     world_from_cv_rotation,
 )
 
-CAMERA_MODELS = ("pinhole", "simple_radial", "radial", "simple_divisional")
+CAMERA_MODELS = {
+    "pinhole": "Pinhole",
+    "simple_radial": "Simple Radial",
+    "radial": "Radial",
+    "simple_divisional": "Fisheye (Divisional)",
+}
 DEFAULT_DEPTH_MODEL = "Ruicheng/moge-2-vitl-normal"
 
 
 def report(progress: float, message: str) -> None:
     print(json.dumps({"progress": progress, "message": message}), flush=True)
+
+
+def log(message: str = "") -> None:
+    print(message, file=sys.stderr, flush=True)
+
+
+def quiet_third_party_output() -> None:
+    """Keep the log to what matters: no library deprecation notices or download bars."""
+    warnings.filterwarnings("ignore", category=FutureWarning)
+    warnings.filterwarnings("ignore", category=DeprecationWarning)
+    logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
+    logging.captureWarnings(True)
+    os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+
+
+def friendly_error(error: Exception) -> str:
+    """Short, actionable message for the Blender status bar."""
+    name = type(error).__name__
+    if name == "OutOfMemoryError":
+        return "The GPU ran out of memory. Choose a smaller Depth Model or lower Depth Resolution."
+    if name in {"LocalEntryNotFoundError", "OfflineModeIsEnabled"}:
+        return "Model weights are not downloaded yet. Allow online access in Blender for the first solve."
+    if isinstance(error, (FileNotFoundError, ValueError)):
+        return str(error)
+    return f"{name}: {error}"
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -41,7 +75,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--image", required=True, type=Path)
     parser.add_argument("--out-dir", required=True, type=Path)
-    parser.add_argument("--camera-model", choices=CAMERA_MODELS, default="pinhole")
+    parser.add_argument(
+        "--camera-model", choices=list(CAMERA_MODELS), default="pinhole"
+    )
     parser.add_argument(
         "--depth-model",
         default=DEFAULT_DEPTH_MODEL,
@@ -135,19 +171,71 @@ def save_proxy_mesh(
     save_glb(path, to_gltf(vertices), faces, uvs * [1, -1] + [0, 1], rgb, normals)
 
 
+def log_context(args: argparse.Namespace, device) -> None:
+    import torch
+
+    gpu = f" ({torch.cuda.get_device_name(device)})" if device.type == "cuda" else ""
+    log(
+        f"AI Camera Match worker {__version__}, PyTorch {torch.__version__}, device {device}{gpu}"
+    )
+    log(f"Image: {args.image}")
+    log(
+        f"Lens model: {CAMERA_MODELS[args.camera_model]}; depth model: {args.depth_model}; "
+        f"depth resolution: {args.depth_resolution} px"
+    )
+    log(f"Output folder: {args.out_dir}")
+
+
+def log_summary(solution: dict) -> None:
+    i, o, c = solution["intrinsics"], solution["orientation"], solution["camera"]
+    u = o["uncertainty_deg"]
+    lens_mm = 36 * i["focal_px"] / solution["image"]["width"]
+    log()
+    log("Result")
+    log(
+        f"  Lens:        {lens_mm:.1f} mm on a 36 mm wide sensor ({i['focal_px']:.0f} px), "
+        f"FoV {np.rad2deg(i['hfov']):.1f}° x {np.rad2deg(i['vfov']):.1f}°"
+    )
+    if i["distortion"]:
+        log(f"  Distortion:  {', '.join(f'{k:.4f}' for k in i['distortion'])}")
+    for name in ("roll", "pitch"):
+        spread = f" (± {u[name]:.2f}°)" if name in u else ""
+        log(f"  {name.title() + ':':<13}{o[name + '_deg']:.2f}°{spread}")
+    if c["height_source"] == "ground_plane":
+        g = solution["ground"]
+        log(
+            f"  Height:      {c['height_m']:.2f} m above the floor "
+            f"({g['inliers']:,} floor points, tilt {g['tilt_deg']:.1f}°)"
+        )
+    else:
+        log(f"  Height:      {c['height_m']:.2f} m (fallback, no floor measured)")
+    for warning in solution["warnings"]:
+        log(f"  Warning:     {warning}")
+    files = [solution[k] for k in ("plate", "proxy_mesh", "fspy") if solution[k]]
+    log(f"  Files:       {', '.join(files + ['solution.json'])}")
+    log(f"  Time:        {solution['seconds']:.1f} s on {solution['device']}")
+
+
 def solve(args: argparse.Namespace) -> dict:
-    from .models import pick_device, run_geocalib, run_moge
+    from .models import moge_version, pick_device, run_geocalib, run_moge
 
     started = time.perf_counter()
-    args.out_dir.mkdir(parents=True, exist_ok=True)
     device = pick_device(args.device)
+    log_context(args, device)
+    if args.depth_model.lower() != "none":
+        moge_version(args.depth_model)  # reject an unusable model before any slow work
+    args.out_dir.mkdir(parents=True, exist_ok=True)
     warnings: list[str] = []
 
-    report(0.05, f"Reading image on {device}")
+    report(0.05, "Reading image")
     rgb = read_rgb(args.image)
     height_px, width_px = rgb.shape[:2]
+    log(f"Image size: {width_px} x {height_px} px")
 
-    report(0.15, f"GeoCalib: calibrating ({args.camera_model})")
+    report(
+        0.15,
+        f"Calibrating lens and horizon with GeoCalib ({CAMERA_MODELS[args.camera_model]} lens)",
+    )
     calibration = run_geocalib(rgb, args.camera_model, device)
     plate_rgb = (
         calibration.undistorted_rgb if calibration.undistorted_rgb is not None else rgb
@@ -167,13 +255,13 @@ def solve(args: argparse.Namespace) -> dict:
         None,
     )
     if args.depth_model.lower() != "none":
-        report(0.45, f"MoGe: estimating metric geometry ({args.depth_model})")
+        report(0.45, f"Estimating depth with MoGe ({Path(args.depth_model).name})")
         small = resize_long_edge(plate_rgb, args.depth_resolution)
         geometry = run_moge(
             small, args.depth_model, float(np.rad2deg(hfov)), device, not args.no_fp16
         )
 
-        report(0.8, "Fitting ground plane")
+        report(0.8, "Finding the floor")
         normals = (
             geometry.normals_cv @ rotation.T
             if geometry.normals_cv is not None
@@ -182,7 +270,7 @@ def solve(args: argparse.Namespace) -> dict:
         plane = fit_ground_plane(geometry.points_cv @ rotation.T, normals)
         if plane is None:
             warnings.append(
-                f"No floor found below the camera; using the default height of {args.default_height} m."
+                f"No floor found below the camera, so the camera uses the fallback height of {args.default_height:.2f} m."
             )
         else:
             camera_height, height_source = plane.height, "ground_plane"
@@ -194,12 +282,12 @@ def solve(args: argparse.Namespace) -> dict:
             }
             if plane.tilt_deg > 5.0:
                 warnings.append(
-                    f"The fitted floor is {plane.tilt_deg:.1f} degrees off GeoCalib's horizon; "
-                    "check the horizon or the floor choice."
+                    f"The floor is tilted {plane.tilt_deg:.1f}° against the horizon. "
+                    "Check the horizon, or whether a table or slope was taken as the floor."
                 )
 
         if not args.no_mesh:
-            report(0.9, "Writing proxy mesh")
+            report(0.9, "Writing the proxy mesh")
             mesh_path = args.out_dir / "proxy_mesh.glb"
             save_proxy_mesh(mesh_path, small, geometry, rotation, camera_height)
 
@@ -222,7 +310,7 @@ def solve(args: argparse.Namespace) -> dict:
 
     if calibration.distortion and np.abs(calibration.distortion).max() > 1e-6:
         warnings.append(
-            "Lens distortion was removed from the plate; the camera matches plate.png."
+            "Lens distortion was removed: the camera matches the undistorted plate.png, not the original photo."
         )
 
     return {
@@ -266,14 +354,17 @@ def solve(args: argparse.Namespace) -> dict:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    quiet_third_party_output()
     try:
         solution = solve(args)
     except Exception as error:  # reported to the add-on as a single JSON line
-        print(json.dumps({"error": f"{type(error).__name__}: {error}"}), flush=True)
-        raise
+        logging.exception("Solve failed. Details:")
+        print(json.dumps({"error": friendly_error(error)}), flush=True)
+        return 1
     (args.out_dir / "solution.json").write_text(
         json.dumps(solution, indent=2), encoding="utf-8"
     )
+    log_summary(solution)
     report(1.0, "Done")
     return 0
 

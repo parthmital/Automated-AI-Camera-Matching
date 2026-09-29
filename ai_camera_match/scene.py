@@ -18,6 +18,20 @@ def load_solution(path: Path) -> dict:
     return solution
 
 
+def summary(solution: dict, camera: bpy.types.Object) -> str:
+    """One-line result for the status bar and reports."""
+    o, c = solution["orientation"], solution["camera"]
+    height = (
+        f"{c['height_m']:.2f} m above the floor"
+        if c["height_source"] == "ground_plane"
+        else f"{c['height_m']:.2f} m (fallback height)"
+    )
+    return (
+        f"{camera.data.lens:.1f} mm lens, roll {o['roll_deg']:.1f}°, "
+        f"pitch {o['pitch_deg']:.1f}°, camera {height}"
+    )
+
+
 def _collection(scene: bpy.types.Scene, name: str) -> bpy.types.Collection:
     collection = bpy.data.collections.get(name)
     if collection is None:

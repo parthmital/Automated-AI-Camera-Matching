@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import time
 from pathlib import Path
 
@@ -23,34 +22,18 @@ class JobOperator:
     def make_job(self, context) -> jobs.Job | None:
         raise NotImplementedError
 
-    def on_poll(self, context) -> None:
-        pass
-
-    def on_finish(self, context, ok: bool) -> set[str]:
+    def on_finish(self, context) -> set[str]:
         raise NotImplementedError
 
     def _poll_job(self, context) -> None:
         wm = context.window_manager
-        for line in self._job.drain():
-            try:
-                message = json.loads(line)
-            except ValueError:
-                message = None
-            if isinstance(message, dict) and "error" in message:
-                self._error = message["error"]
-            elif isinstance(message, dict) and "progress" in message:
-                wm.aicm_progress = message["progress"]
-                wm.aicm_status = message["message"]
-            elif line.strip():
-                self._last_line = line.strip()
-        self.on_poll(context)
+        wm.aicm_progress, wm.aicm_status = self._job.progress, self._job.message
 
     def _begin(self, context) -> bool:
         wm = context.window_manager
         if wm.aicm_busy:
-            self.report({"ERROR"}, "Another AI Camera Match job is running")
+            self.report({"ERROR"}, "Another AI Camera Match job is already running")
             return False
-        self._error = self._last_line = ""
         self._job = self.make_job(context)
         if self._job is None:
             return False
@@ -62,15 +45,16 @@ class JobOperator:
         wm = context.window_manager
         self._poll_job(context)
         wm.aicm_busy = False
-        ok = self._job.returncode == 0
-        if not ok:
-            detail = (
-                self._error or self._last_line or f"exit code {self._job.returncode}"
-            )
-            wm.aicm_status = f"Failed: {detail}"
-            self.report({"ERROR"}, f"{wm.aicm_status} (log: {self._job.log_path})")
-            return {"CANCELLED"}
-        return self.on_finish(context, ok)
+        if self._job.returncode == 0:
+            return self.on_finish(context)
+        if self._job.error == "Cancelled":
+            wm.aicm_status = "Cancelled"
+            self.report({"WARNING"}, "Cancelled")
+        else:
+            wm.aicm_status = f"Failed: {self._job.error}"
+            detail = wm.aicm_status.rstrip(".")
+            self.report({"ERROR"}, f"{detail}. Full log: {self._job.log_path}")
+        return {"CANCELLED"}
 
     def execute(self, context):
         if not self._begin(context):
@@ -121,19 +105,16 @@ class AICM_OT_install_environment(JobOperator, bpy.types.Operator):
         p = prefs(context)
         env_dir = p.resolved_env_dir()
         return jobs.Job(
+            title="install",
             steps=jobs.install_steps(p.resolved_base_python(), env_dir, p.torch_index),
             env=jobs.process_env(p.cache_dir()),
             log_path=user_dir() / "logs" / "install.log",
         )
 
-    def on_poll(self, context):
+    def on_finish(self, context):
         wm = context.window_manager
-        wm.aicm_progress = self._job.step / len(self._job.steps)
-        wm.aicm_status = self._job.label
-
-    def on_finish(self, context, ok):
-        context.window_manager.aicm_status = f"Installed. {self._last_line}"
-        self.report({"INFO"}, context.window_manager.aicm_status)
+        wm.aicm_status = f"Solver environment ready ({self._job.last_output})"
+        self.report({"INFO"}, wm.aicm_status)
         return {"FINISHED"}
 
 
@@ -184,19 +165,20 @@ class AICM_OT_solve(JobOperator, bpy.types.Operator):
             "--depth-resolution",
             str(settings.depth_resolution),
             "--default-height",
-            str(settings.default_height),
+            f"{settings.default_height:.3g}",
             "--device",
             p.device,
         ]
         if not settings.import_mesh:
             command.append("--no-mesh")
         return jobs.Job(
+            title="solve",
             steps=[("Solving", command)],
             env=jobs.process_env(p.cache_dir(), offline=not bpy.app.online_access),
             log_path=self._out_dir / "solve.log",
         )
 
-    def on_finish(self, context, ok):
+    def on_finish(self, context):
         settings = context.scene.aicm
         wm = context.window_manager
         try:
@@ -207,17 +189,13 @@ class AICM_OT_solve(JobOperator, bpy.types.Operator):
                 settings.import_mesh,
             )
         except Exception as error:  # surface scene-building problems to the user
-            wm.aicm_status = f"Failed to build scene: {error}"
+            wm.aicm_status = f"Solved, but building the scene failed: {error}"
             self.report({"ERROR"}, wm.aicm_status)
             return {"CANCELLED"}
         solution = scene.load_solution(self._out_dir / "solution.json")
         for warning in solution["warnings"]:
             self.report({"WARNING"}, warning)
-        o, c = solution["orientation"], solution["camera"]
-        wm.aicm_status = (
-            f"{camera.name}: {camera.data.lens:.1f} mm, roll {o['roll_deg']:.1f}°, "
-            f"pitch {o['pitch_deg']:.1f}°, height {c['height_m']:.2f} m ({c['height_source'].replace('_', ' ')})"
-        )
+        wm.aicm_status = f"Matched {camera.name}: {scene.summary(solution, camera)}"
         self.report({"INFO"}, wm.aicm_status)
         return {"FINISHED"}
 
@@ -242,7 +220,10 @@ class AICM_OT_import_solution(bpy.types.Operator, ImportHelper):
         except (OSError, ValueError, KeyError) as error:
             self.report({"ERROR"}, str(error))
             return {"CANCELLED"}
-        self.report({"INFO"}, f"Set up {camera.name}")
+        solution = scene.load_solution(Path(self.filepath))
+        self.report(
+            {"INFO"}, f"Imported {camera.name}: {scene.summary(solution, camera)}"
+        )
         return {"FINISHED"}
 
 
@@ -256,7 +237,10 @@ class AICM_OT_open_folder(bpy.types.Operator):
         image = context.scene.aicm.image
         folder = solve_dir(Path(bpy.path.abspath(image))) if image else user_dir()
         if not folder.exists():
-            self.report({"ERROR"}, f"{folder} does not exist yet")
+            self.report(
+                {"ERROR"},
+                f"Nothing solved for this image yet ({folder} does not exist)",
+            )
             return {"CANCELLED"}
         bpy.ops.wm.path_open(filepath=str(folder))
         return {"FINISHED"}

@@ -2,6 +2,30 @@
 
 > **Note:** Numeric values marked _[missing]_ were lost when this document was exported (they were embedded as equation images). Verify them against the cited sources before relying on them.
 
+## Contents
+
+- [Evolution from Classical Vanishing Geometry to Deep Invariant Representations](#evolution-from-classical-vanishing-geometry-to-deep-invariant-representations)
+- [Deep Architectural Approaches to Monocular Calibration and Geometry](#deep-architectural-approaches-to-monocular-calibration-and-geometry)
+  - [GeoCalib: Second-Order Geometric Optimisation on Neural Perspective Fields](#geocalib-second-order-geometric-optimisation-on-neural-perspective-fields)
+  - [MoGe Series (MoGe-2 and MoGe-3): Monocular Geometry Foundation Models](#moge-series-moge-2-and-moge-3-monocular-geometry-foundation-models)
+  - [Apple Depth Pro: High-Resolution Metric Depth and Decoupled Focal Length Estimation](#apple-depth-pro-high-resolution-metric-depth-and-decoupled-focal-length-estimation)
+  - [AnyCalib: Universal On-Manifold Calibration for Arbitrary Camera Models](#anycalib-universal-on-manifold-calibration-for-arbitrary-camera-models)
+  - [UniDepth and UniDAC: Disentangled Pseudo-Spherical Metric Calibration](#unidepth-and-unidac-disentangled-pseudo-spherical-metric-calibration)
+  - [Puffin: Spatial Reasoning and Multimodal Thinking with Camera](#puffin-spatial-reasoning-and-multimodal-thinking-with-camera)
+- [Quantitative Benchmarks and Cross-Model Architectural Comparison](#quantitative-benchmarks-and-cross-model-architectural-comparison)
+- [Fully Automated Blender Integration Pipeline: The Zero-Click fSpy Architecture](#fully-automated-blender-integration-pipeline-the-zero-click-fspy-architecture)
+  - [Mathematical Coordinate Transformation](#mathematical-coordinate-transformation)
+  - [Automated Ground Plane Estimation for Camera Height](#automated-ground-plane-estimation-for-camera-height)
+  - [Automated fSpy JSON Exporter](#automated-fspy-json-exporter)
+  - [Headless Blender Automation Script](#headless-blender-automation-script)
+- [Systematic Failure Modes, Edge Cases, and Operational Safeguards](#systematic-failure-modes-edge-cases-and-operational-safeguards)
+  - [Optical Centre Decentring and Cropped Plates](#optical-centre-decentring-and-cropped-plates)
+  - [Scale Ambiguity and Ground Plane Identification](#scale-ambiguity-and-ground-plane-identification)
+  - [Specular, Reflective, and Translucent Surfaces](#specular-reflective-and-translucent-surfaces)
+  - [Radial and Non-Rectilinear Lens Distortions](#radial-and-non-rectilinear-lens-distortions)
+- [Practical Synthesis and Implementation Strategies](#practical-synthesis-and-implementation-strategies)
+- [Works Cited](#works-cited)
+
 ## Evolution from Classical Vanishing Geometry to Deep Invariant Representations
 
 Single-view camera calibration in visual effects (VFX), computer animation, and architectural visualisation has historically depended on classical projective geometry [1]. Utilities such as fSpy, and its predecessor BLAM, rely on user-defined vanishing lines to compute vanishing points along mutually orthogonal axes [2]. From these intersections, the camera's focal length, field of view (FoV), and spatial orientation (pitch, roll, and yaw) are calculated via closed-form projective equations [2].
@@ -23,23 +47,15 @@ These models decouple camera calibration from strict structural scene assumption
 
 GeoCalib, introduced by Veicht et al. at ECCV 2024, bridges deep semantic feature extraction with classical non-linear optimisation to estimate camera intrinsics and absolute gravity orientation from a single uncalibrated plate [7]. The primary codebase and model checkpoints are available in the [official repository](https://github.com/cvg/GeoCalib) [7].
 
-The architecture addresses the poor generalisation typical of direct parameter regression networks, which routinely overfit to specific camera distributions [1]. GeoCalib employs a SegNeXt-based convolutional vision backbone that outputs two dense perspective vector fields alongside per-pixel uncertainty estimations [16]:
+The architecture addresses the poor generalisation typical of direct parameter regression networks, which routinely overfit to specific camera distributions [1]. GeoCalib employs a SegNeXt-based convolutional vision backbone that outputs two dense perspective vector fields alongside per-pixel uncertainty estimations [16]: an up-vector field and a latitude field.
 
-```math
-\mathbf{u}_\mathbf{p} \in \mathbb{R}^2, \qquad \varphi_\mathbf{p} \in \left[-\frac{\pi}{2}, \frac{\pi}{2}\right]
-```
+The up-vector field defines the projected 2D direction of world gravity at each pixel, while the latitude field denotes the elevation angle of the camera ray corresponding to each pixel relative to the horizontal plane [16]. Rather than treating these maps as heuristic visualisations, GeoCalib embeds a differentiable Levenberg-Marquardt (LM) optimiser directly into the training loop [16].
 
-The up-vector field $`\mathbf{u}_\mathbf{p}`$ defines the projected 2D direction of world gravity at pixel coordinate $`\mathbf{p}`$, while the latitude field $`\varphi_\mathbf{p}`$ denotes the elevation angle of the camera ray corresponding to pixel $`\mathbf{p}`$ relative to the horizontal plane [16]. Rather than treating these maps as heuristic visualisations, GeoCalib embeds a differentiable Levenberg-Marquardt (LM) optimiser directly into the training loop [16].
-
-The optimiser minimises a confidence-weighted non-linear least-squares residual between the observed fields and the analytic projection induced by parameter vector $`\boldsymbol{\theta}`$, where focal length $`f`$ is optimised in log-space, gravity $`\mathbf{g}`$ is parameterised on the unit two-sphere manifold $`\mathbb{S}^2`$, and distortion is parameterised via polynomial coefficients $`k`$ [16]:
-
-```math
-E(\boldsymbol{\theta}) = \sum_{\mathbf{p}} \left[ \sigma_u \left\lVert \mathbf{u}_\mathbf{p}(\boldsymbol{\theta}) - \hat{\mathbf{u}}_\mathbf{p} \right\rVert^2 + \sigma_\varphi \left\lVert \sin \varphi_\mathbf{p}(\boldsymbol{\theta}) - \sin \hat{\varphi}_\mathbf{p} \right\rVert^2 \right]
-```
+The optimiser minimises a confidence-weighted non-linear least-squares residual between the observed fields and the analytic projection induced by the camera parameters, where focal length is optimised in log-space, gravity is parameterised on the unit sphere, and distortion is parameterised via polynomial coefficients [16].
 
 Because gradients propagate backwards through the unrolled optimiser iterations during training, the SegNeXt encoder learns to prioritise informative geometric visual anchors (such as vertical architecture, human figures, trees, and horizon gradients) while assigning high variance (low confidence weight) to ambiguous or non-upright surfaces [16].
 
-GeoCalib accepts an unconstrained single RGB image of arbitrary resolution [7]. The forward pass outputs horizontal and vertical focal lengths ($`f_x, f_y`$), the vertical and horizontal field of view ($`\text{vFoV}, \text{hFoV}`$), lens distortion parameters ($`k`$), the world-space gravity vector $`\mathbf{g}`$ (from which camera roll $`\rho`$ and pitch $`\beta`$ are directly solved), and per-pixel uncertainty heatmaps [7]. The model operates completely autonomously, executing feedforward inference without initial manual bounds or seed coordinates [7].
+GeoCalib accepts an unconstrained single RGB image of arbitrary resolution [7]. The forward pass outputs horizontal and vertical focal lengths, the vertical and horizontal field of view (vFoV, hFoV), lens distortion parameters, the world-space gravity vector (from which camera roll and pitch are directly solved), and per-pixel uncertainty heatmaps [7]. The model operates completely autonomously, executing feedforward inference without initial manual bounds or seed coordinates [7].
 
 Evaluated on the MegaDepth, LaMAR, Stanford2D3D, and TartanAir benchmarks, GeoCalib achieves substantial performance improvements over prior single-image calibration models [7]. On MegaDepth, GeoCalib achieves an Area Under the Curve (AUC) for roll at _[missing]_ error thresholds of _[missing]_ (median error _[missing]_), pitch AUC of _[missing]_ (median error _[missing]_), and FoV AUC of _[missing]_ (median error _[missing]_) [7]. On LaMAR indoor AR sequences, its roll AUC reaches _[missing]_ with a pitch AUC of _[missing]_ [7].
 
@@ -49,7 +65,7 @@ Blender integration is well-supported within the community ecosystem [13]. The o
 
 The underlying code is licensed under Apache-2.0, while model weights are distributed under the Creative Commons Attribution 4.0 International License (CC-BY 4.0), permitting unencumbered commercial and studio deployment [7]. Hardware demands are modest: GeoCalib requires approximately _[missing]_ of VRAM and achieves an average inference latency of _[missing]_ on an NVIDIA RTX 3090/4090 GPU [17].
 
-The primary operational limitation of GeoCalib is its structural assumption that the principal point coincides with the geometric centre of the sensor ($`c_x = W/2,\ c_y = H/2`$), meaning heavy asymmetric crops induce angular drift in estimated pitch [7]. Additionally, while it fully resolves camera rotation and focal length, it does not infer metric translation $`\mathbf{t}`$ (such as camera height above the ground plane) [7].
+The primary operational limitation of GeoCalib is its structural assumption that the principal point coincides with the geometric centre of the sensor, meaning heavy asymmetric crops induce angular drift in estimated pitch [7]. Additionally, while it fully resolves camera rotation and focal length, it does not infer metric translation (such as camera height above the ground plane) [7].
 
 Consequently, while it functions as a drop-in replacement for fSpy's vanishing-point orientation and FoV extraction, full spatial positioning requires pairing with an automated ground-plane depth detector [7].
 
@@ -61,13 +77,13 @@ MoGe-1 and MoGe-2 pair a high-capacity DINOv2 Vision Transformer encoder (ViT-L/
 
 MoGe-3 introduces Self-Guided Sparse 3D Refinement (SSR) [24]. Standard 2D convolutional or attention decoders bleed features across sharp depth boundaries, rounding thin geometric structures (such as poles, foliage, and structural edges) [24]. MoGe-3 resolves this by unprojecting the base point map into a sparse 3D voxel shell and iteratively applying sparse 3D convolutions [24]. Because foreground edges and distant background regions occupy physically distinct voxels in 3D Euclidean space, feature bleeding across occluding contours is eliminated [24].
 
-Simultaneously, an auxiliary projection head recovers the horizontal field of view ($`\text{hFoV}`$) by enforcing projective consistency across the reconstructed 3D points [11].
+Simultaneously, an auxiliary projection head recovers the horizontal field of view (hFoV) by enforcing projective consistency across the reconstructed 3D points [11].
 
-MoGe ingests an uncalibrated RGB image of arbitrary resolution and aspect ratio [14]. It outputs a dense metric 3D point map $`\mathbf{P} \in \mathbb{R}^{H \times W \times 3}`$, a metric depth map, an aligned surface normal map, a sky/infinity semantic mask, and camera horizontal/vertical FoV values [11]. The pipeline is fully automated and supports execution via a CLI that converts predicted point geometry into textured `.glb` 3D assets [14].
+MoGe ingests an uncalibrated RGB image of arbitrary resolution and aspect ratio [14]. It outputs a dense metric 3D point map (one 3D point per pixel), a metric depth map, an aligned surface normal map, a sky/infinity semantic mask, and camera horizontal/vertical FoV values [11]. The pipeline is fully automated and supports execution via a CLI that converts predicted point geometry into textured `.glb` 3D assets [14].
 
 MoGe achieves high geometric accuracy across unseen benchmarks, setting the current state of the art in open-domain point map and normal estimation [14]. On zero-shot evaluations across nine public datasets, MoGe-3 matches or exceeds the boundary recall of specialised depth models while generating lower point-cloud distortion and preserving fine architectural details [24].
 
-The model supports unconstrained perspective photography, macro shots, wide environments, and full $`360^\circ`$ equirectangular panoramas via a dedicated spherical parameterisation pipeline (`moge infer_panorama`) [14].
+The model supports unconstrained perspective photography, macro shots, wide environments, and full 360° equirectangular panoramas via a dedicated spherical parameterisation pipeline (`moge infer_panorama`) [14].
 
 Blender integration is direct: because the model can export textured `.glb` meshes embedding metric coordinates alongside computed FoV parameters, importing the resulting asset into Blender instantiates both the scene geometry and an aligned camera frustum [14].
 
@@ -85,23 +101,15 @@ The architecture utilises a multi-scale Vision Transformer design optimised to p
 
 To overcome the scale ambiguity inherent in monocular vision, Depth Pro decouples focal length estimation from dense depth estimation [30]. Rather than training the two heads jointly, which introduces gradient interference and degrades metric stability, Depth Pro freezes the core depth encoder and trains a separate focal length estimation head using large image datasets with EXIF metadata [30].
 
-The predicted focal length in pixels ($`f_{px}`$) scales the canonical inverse depth map $`C`$ into an absolute metric depth map $`D_m`$, where $`w`$ is the image width [9]:
+The predicted focal length in pixels scales the canonical inverse depth map into an absolute metric depth map, using the image width as a normalising factor [9].
 
-```math
-D_m = \frac{f_{px}}{w \cdot C}
-```
-
-Depth Pro takes a single RGB image and outputs a _[missing]_ metric depth map (_[missing]_ native resolution) with absolute physical scale in metres, alongside the estimated horizontal focal length $`f_{px}`$ [28]. Operation is entirely automatic, requiring no prior EXIF tags or user hints [28].
+Depth Pro takes a single RGB image and outputs a _[missing]_ metric depth map (_[missing]_ native resolution) with absolute physical scale in metres, alongside the estimated horizontal focal length focal length [28]. Operation is entirely automatic, requiring no prior EXIF tags or user hints [28].
 
 Depth Pro exhibits high zero-shot boundary tracing precision, avoiding flying-pixel edge artefacts on intricate silhouettes such as hair, power lines, and foliage [9]. On zero-shot focal length benchmarks, it outperforms competing methods [9]. On the PPR10K evaluation benchmark, _[missing]_ of Depth Pro's focal length predictions achieve an error within _[missing]_ of ground truth (_[missing]_), compared to _[missing]_ for the previous state of the art (SPEC) [33].
 
 It reliably processes portraits, architectural interiors, landscapes, and street photography [9].
 
-Blender integration is implemented through custom nodes (such as ComfyUI-Depth-Pro) and Python unprojection scripts [37]. The predicted focal length $`f_{px}`$ maps directly to Blender's millimetre-based focal length:
-
-```math
-f_{mm} = f_{px} \cdot \frac{\text{sensor width}_{mm}}{\text{image width}_{px}}
-```
+Blender integration is implemented through custom nodes (such as ComfyUI-Depth-Pro) and Python unprojection scripts [37]. The predicted focal length in pixels maps directly to Blender's millimetre-based focal length by scaling it with the ratio of sensor width (mm) to image width (pixels).
 
 The metric depth map unprojects to an absolute point cloud where 1 Blender unit equals 1 real-world metre [28].
 
@@ -115,7 +123,7 @@ Depth Pro's main limitation is that it regresses focal length and metric depth a
 
 AnyCalib (Tirado-Garin and Civera, ICCV 2025) provides model-agnostic camera calibration across arbitrary optical projections, removing the assumption that input imagery must conform to an ideal rectilinear pinhole model [8]. The codebase is available at <https://github.com/javrtg/AnyCalib> [8].
 
-Built on on-manifold learning principles, AnyCalib formulates single-view calibration as regressing a continuous 2D field-of-view tangent field and a dense 3D viewing ray map ($`\mathbf{r}_\mathbf{p} \in \mathbb{S}^2`$) across all sensor pixels [8]. Rather than locking the output space to a single set of pinhole parameters, the predicted ray field is analytically fitted to user-specified or automatically selected camera projection models [8]:
+Built on on-manifold learning principles, AnyCalib formulates single-view calibration as regressing a continuous 2D field-of-view tangent field and a dense 3D viewing ray map (a unit direction per pixel) across all sensor pixels [8]. Rather than locking the output space to a single set of pinhole parameters, the predicted ray field is analytically fitted to user-specified or automatically selected camera projection models [8]:
 
 - Pinhole cameras (`pinhole`) [8].
 - Radial distortion models (`radial:k`, `simple_radial:k`) [8].
@@ -138,15 +146,15 @@ AnyCalib focuses strictly on camera intrinsics, ray configurations, and lens dis
 
 UniDepth (Piccinelli et al., CVPR 2024; UniDepthV2, 2025) and its multi-camera extension UniDAC (CVPR 2026) combine camera calibration with metric depth estimation by predicting camera intrinsics within the core depth pipeline [12]. The primary repository is hosted at <https://github.com/lpiccinelli-eth/UniDepth> [12], with UniDAC maintained at <https://github.com/girish1511/UniDAC> [39].
 
-Rather than outputting Cartesian coordinates directly, UniDepth represents scenes using a pseudo-spherical parameterisation $`(\theta, \phi, z_{\log})`$, where $`\theta`$ and $`\phi`$ represent the horizontal azimuth and vertical elevation angles of each camera ray, and $`z_{\log}`$ represents log-metric depth [12]. The architecture incorporates a self-promptable camera module that bootstraps class tokens from a Vision Transformer (ViT-S/14 or ViT-L/14) through self-attention layers to predict four intrinsic scalar offsets $`(\Delta f_x, \Delta f_y, \Delta c_x, \Delta c_y)`$ [12].
+Rather than outputting Cartesian coordinates directly, UniDepth represents scenes using a pseudo-spherical parameterisation made of the horizontal azimuth and vertical elevation angles of each camera ray, plus log-metric depth [12]. The architecture incorporates a self-promptable camera module that bootstraps class tokens from a Vision Transformer (ViT-S/14 or ViT-L/14) through self-attention layers to predict four intrinsic scalar offsets (two focal lengths and two principal point coordinates) [12].
 
-Backprojecting pixels through the inverted predicted intrinsic matrix $`\mathbf{K}^{-1}`$ yields unit-sphere rays that condition the dense depth decoder [12]. Predicting angular rays independently from metric depth values disentangles camera geometry from scene scale, preventing the two objectives from destabilising each other during training [12].
+Backprojecting pixels through the inverse of the predicted intrinsic matrix yields unit-sphere rays that condition the dense depth decoder [12]. Predicting angular rays independently from metric depth values disentangles camera geometry from scene scale, preventing the two objectives from destabilising each other during training [12].
 
-UniDepth accepts an uncalibrated RGB image and outputs a $`3 \times 3`$ intrinsic camera calibration matrix $`\mathbf{K}`$, a dense metric depth map, an uncertainty confidence field, and an unprojected 3D point cloud in camera coordinates [12]. The model runs without human intervention, though it can optionally ingest ground-truth intrinsics when available to further refine depth accuracy [12].
+UniDepth accepts an uncalibrated RGB image and outputs a 3×3 intrinsic camera calibration matrix (K), a dense metric depth map, an uncertainty confidence field, and an unprojected 3D point cloud in camera coordinates [12]. The model runs without human intervention, though it can optionally ingest ground-truth intrinsics when available to further refine depth accuracy [12].
 
-Evaluated on NYUv2, ScanNet++, and KITTI-360, UniDepth and UniDAC exhibit consistent zero-shot cross-dataset transfer [39]. UniDAC achieves a $`\delta_1`$ accuracy of _[missing]_ (with an absolute relative error of _[missing]_) on ScanNet++ fisheye indoor scenes [39].
+Evaluated on NYUv2, ScanNet++, and KITTI-360, UniDepth and UniDAC exhibit consistent zero-shot cross-dataset transfer [39]. UniDAC achieves a δ1 accuracy of _[missing]_ (with an absolute relative error of _[missing]_) on ScanNet++ fisheye indoor scenes [39].
 
-The models handle rectilinear images, fisheye lenses, and spherical $`360^\circ`$ inputs [39].
+The models handle rectilinear images, fisheye lenses, and spherical 360° inputs [39].
 
 Predicted intrinsics map directly into Blender camera parameters, while the generated metric point clouds export to PLY format for use as spatial reference geometry [12].
 
@@ -160,13 +168,7 @@ Puffin (Liao et al., ICLR 2026) treats single-view camera estimation as a multim
 
 Puffin integrates a vision encoder (SigLIP/DINOv2), an autoregressive Large Language Model (LLM), and a Diffusion Transformer (DiT) conditioned on camera geometry [44]. The system is trained across four stages on Puffin-4M, a curated dataset of four million vision-language-camera triplets containing ground-truth intrinsics, extrinsics, and geometric reasoning chains [44].
 
-When processing an input image, Puffin generates an internal chain of geometric reasoning: it identifies spatial cues (for example, Dutch angles, converging architectural planes, horizon lines, and foreground-background depth ordering), maps them to photographic terminology, and predicts camera parameters as structured tokens [19]:
-
-```math
-(\rho, \beta, \psi, f, k)
-```
-
-representing roll, pitch, yaw, focal length, and radial distortion [19].
+When processing an input image, Puffin generates an internal chain of geometric reasoning: it identifies spatial cues (for example, Dutch angles, converging architectural planes, horizon lines, and foreground-background depth ordering), maps them to photographic terminology, and predicts camera parameters as structured tokens [19] representing roll, pitch, yaw, focal length, and radial distortion [19].
 
 Puffin accepts a single 2D image alongside an instruction prompt (such as _"Reason the spatial distribution of this image in a thinking mode, and then estimate its camera parameters"_) [19]. It outputs a textual spatial analysis followed by numerical predictions for roll, pitch, and FoV [19]. The pipeline is fully automated and supports instruction-based steering [45].
 
@@ -182,20 +184,20 @@ While Puffin provides detailed geometric reasoning, token generation introduces 
 
 ## Quantitative Benchmarks and Cross-Model Architectural Comparison
 
-Evaluating neural calibration models requires assessing angular accuracy across extrinsic parameters (roll $`\rho`$ and pitch $`\beta`$), field of view ($`\text{FoV}`$), and metric depth recovery [2]. In monocular setups, roll is generally the most constrained parameter because vertical visual cues directly indicate the direction of gravity [7]. Pitch and FoV exhibit higher coupling, as changing camera tilt can closely mimic shifts in focal length and vertical optical centring [11].
+Evaluating neural calibration models requires assessing angular accuracy across extrinsic parameters (roll and pitch), field of view (FoV), and metric depth recovery [2]. In monocular setups, roll is generally the most constrained parameter because vertical visual cues directly indicate the direction of gravity [7]. Pitch and FoV exhibit higher coupling, as changing camera tilt can closely mimic shifts in focal length and vertical optical centring [11].
 
 The following table summarises performance across the leading single-image calibration and monocular geometry systems, compiled from primary benchmark evaluations on MegaDepth, LaMAR, ScanNet++, and PPR10K:
 
-| Model                         | Parameter outputs                                   | MegaDepth roll AUC (1°/5°/10°)              | MegaDepth pitch AUC (1°/5°/10°)                  | MegaDepth FoV AUC (1°/5°/10°)                    | Median error (roll / pitch / FoV)                              | Primary benchmark metric                                           | Latency and VRAM                   | Licence                           | End-to-end fSpy replacement?                                                             |
-| :---------------------------- | :-------------------------------------------------- | :------------------------------------------ | :----------------------------------------------- | :----------------------------------------------- | :------------------------------------------------------------- | :----------------------------------------------------------------- | :--------------------------------- | :-------------------------------- | :--------------------------------------------------------------------------------------- |
-| **GeoCalib** (ECCV 2024) [7]  | $`f`$, $`k`$, $`\mathbf{g}`$ (pitch, roll) [7]      | _[missing]_ [7, 19]                         | _[missing]_ [7, 19]                              | _[missing]_ [7, 19]                              | _[missing]_ [19]                                               | Outperforms ParamNet and UVP by _[missing]_ at fine thresholds [7] | _[missing]_; _[missing]_ VRAM [17] | Apache-2.0 / CC-BY 4.0 [7]        | **Yes** (solves orientation and FoV; height requires plane fitting) [7]                  |
-| **MoGe-3** (MSRA 2026) [24]   | Metric point map, normals, $`\text{hFoV}`$ [11, 14] | Derived via normal fitting [11]             | Derived via normal fitting [11]                  | End-to-end projective ray solve [11]             | Sub-degree normal angular error [24]                           | Sets SOTA across 9 zero-shot geometry benchmarks [24]              | _[missing]_; _[missing]_ VRAM [24] | MIT [25]                          | **Partial** (direct proxy mesh and FoV; pitch/roll derived downstream) [11]              |
-| **Depth Pro** (ICLR 2025) [9] | Metric depth ($`D_m`$), focal $`f_{px}`$ [28, 35]   | Not regressed [28]                          | Not regressed [28]                               | Derived from $`f_{px}`$ and width [34]           | _[missing]_ on PPR10K focal split [33]                         | SOTA zero-shot boundary F1 score and sharp edge tracing [28]       | _[missing]_; _[missing]_ VRAM [28] | Apple Sample Code / Research [28] | **Partial** (solves focal length and scale; requires gravity orientation) [28]           |
-| **AnyCalib** (ICCV 2025) [8]  | Pinhole, radial, fisheye [8]                        | Not regressed [8]                           | Not regressed [8]                                | Model-agnostic ray field fit [8]                 | Mean FoV error _[missing]_ (MegaDepth pinhole) [2]             | Superior ray consistency on cropped and wide-angle optics [8]      | _[missing]_; _[missing]_ VRAM [8]  | Apache-2.0 [8]                    | **No** (specialised for complex intrinsics and non-pinhole lenses) [8]                   |
-| **UniDAC** (CVPR 2026) [39]   | Intrinsic matrix $`\mathbf{K}`$, metric depth [12]  | View-space only [12]                        | View-space only [12]                             | Derived directly from $`\mathbf{K}`$ matrix [12] | $`\delta_1`$ _[missing]_, AbsRel _[missing]_ on ScanNet++ [39] | Outperforms Metric3D v2 on universal camera inputs [39]            | _[missing]_; _[missing]_ VRAM      | CC BY-NC-SA 4.0 [41]              | **Partial** (solves $`\mathbf{K}`$ and metric geometry; requires horizon alignment) [12] |
-| **Puffin** (ICLR 2026) [19]   | Roll, pitch, yaw, FoV, distortion [19]              | Competitive with specialised baselines [19] | Outperforms baselines on unconstrained sets [19] | Consistent with wide-angle splits [19]           | Direct language-token parameter output [19]                    | SOTA unified camera-centric multimodal spatial reasoning [19]      | _[missing]_; _[missing]_ VRAM      | Research open source [44]         | **Yes** (generates camera rotation and FoV via semantic reasoning) [19]                  |
+| Model                         | Parameter outputs                                   | MegaDepth roll AUC (1°/5°/10°)              | MegaDepth pitch AUC (1°/5°/10°)                  | MegaDepth FoV AUC (1°/5°/10°)                  | Median error (roll / pitch / FoV)                    | Primary benchmark metric                                           | Latency and VRAM                   | Licence                           | End-to-end fSpy replacement?                                                   |
+| :---------------------------- | :-------------------------------------------------- | :------------------------------------------ | :----------------------------------------------- | :--------------------------------------------- | :--------------------------------------------------- | :----------------------------------------------------------------- | :--------------------------------- | :-------------------------------- | :----------------------------------------------------------------------------- |
+| **GeoCalib** (ECCV 2024) [7]  | Focal length, distortion, gravity (pitch, roll) [7] | _[missing]_ [7, 19]                         | _[missing]_ [7, 19]                              | _[missing]_ [7, 19]                            | _[missing]_ [19]                                     | Outperforms ParamNet and UVP by _[missing]_ at fine thresholds [7] | _[missing]_; _[missing]_ VRAM [17] | Apache-2.0 / CC-BY 4.0 [7]        | **Yes** (solves orientation and FoV; height requires plane fitting) [7]        |
+| **MoGe-3** (MSRA 2026) [24]   | Metric point map, normals, hFoV [11, 14]            | Derived via normal fitting [11]             | Derived via normal fitting [11]                  | End-to-end projective ray solve [11]           | Sub-degree normal angular error [24]                 | Sets SOTA across 9 zero-shot geometry benchmarks [24]              | _[missing]_; _[missing]_ VRAM [24] | MIT [25]                          | **Partial** (direct proxy mesh and FoV; pitch/roll derived downstream) [11]    |
+| **Depth Pro** (ICLR 2025) [9] | Metric depth, focal length (px) [28, 35]            | Not regressed [28]                          | Not regressed [28]                               | Derived from focal length and image width [34] | _[missing]_ on PPR10K focal split [33]               | SOTA zero-shot boundary F1 score and sharp edge tracing [28]       | _[missing]_; _[missing]_ VRAM [28] | Apple Sample Code / Research [28] | **Partial** (solves focal length and scale; requires gravity orientation) [28] |
+| **AnyCalib** (ICCV 2025) [8]  | Pinhole, radial, fisheye [8]                        | Not regressed [8]                           | Not regressed [8]                                | Model-agnostic ray field fit [8]               | Mean FoV error _[missing]_ (MegaDepth pinhole) [2]   | Superior ray consistency on cropped and wide-angle optics [8]      | _[missing]_; _[missing]_ VRAM [8]  | Apache-2.0 [8]                    | **No** (specialised for complex intrinsics and non-pinhole lenses) [8]         |
+| **UniDAC** (CVPR 2026) [39]   | Intrinsic matrix K, metric depth [12]               | View-space only [12]                        | View-space only [12]                             | Derived directly from the K matrix [12]        | δ1 _[missing]_, AbsRel _[missing]_ on ScanNet++ [39] | Outperforms Metric3D v2 on universal camera inputs [39]            | _[missing]_; _[missing]_ VRAM      | CC BY-NC-SA 4.0 [41]              | **Partial** (solves K and metric geometry; requires horizon alignment) [12]    |
+| **Puffin** (ICLR 2026) [19]   | Roll, pitch, yaw, FoV, distortion [19]              | Competitive with specialised baselines [19] | Outperforms baselines on unconstrained sets [19] | Consistent with wide-angle splits [19]         | Direct language-token parameter output [19]          | SOTA unified camera-centric multimodal spatial reasoning [19]      | _[missing]_; _[missing]_ VRAM      | Research open source [44]         | **Yes** (generates camera rotation and FoV via semantic reasoning) [19]        |
 
-Across these benchmarks, specialised geometric models demonstrate distinct trade-offs. GeoCalib provides the most accurate and reliable orientation recovery, achieving an _[missing]_ AUC at _[missing]_ on MegaDepth by enforcing physical constraints on the $`\mathbb{S}^2`$ gravity manifold [7].
+Across these benchmarks, specialised geometric models demonstrate distinct trade-offs. GeoCalib provides the most accurate and reliable orientation recovery, achieving an _[missing]_ AUC at _[missing]_ on MegaDepth by enforcing physical constraints on the unit-sphere gravity manifold [7].
 
 However, it does not infer metric depth or scene translation [7]. Conversely, Depth Pro and MoGe-3 excel at surface reconstruction and metric focal length estimation, but require downstream gravity alignment to match world coordinate axes [14].
 
@@ -205,78 +207,25 @@ These complementary strengths suggest that combining a specialised calibration m
 
 ### Mathematical Coordinate Transformation
 
-Integrating neural camera predictions into Blender requires reconciling different coordinate conventions [6]. Computer vision libraries (OpenCV, COLMAP, GeoCalib) typically adopt a right-handed camera coordinate frame:
+Integrating neural camera predictions into Blender requires reconciling different coordinate conventions [6]. Computer vision libraries (OpenCV, COLMAP, GeoCalib) typically adopt a right-handed camera coordinate frame: +X right, +Y down, +Z forward (viewing direction).
 
-```math
-+X = \text{right}, \quad +Y = \text{down}, \quad +Z = \text{forward (viewing direction)}
-```
+Blender's camera object convention is also right-handed, but oriented differently: +X right, +Y up, −Z forward (viewing direction).
 
-Blender's camera object convention is also right-handed, but oriented differently:
+Blender's world space uses a Z-up convention: +X east, +Y north, +Z up.
 
-```math
-+X = \text{right}, \quad +Y = \text{up}, \quad -Z = \text{forward (viewing direction)}
-```
+Given GeoCalib's predicted gravity unit vector expressed in the vision camera frame, the camera's roll and pitch are derived analytically from its components [7].
 
-Blender's world space uses a $`Z`$-up convention:
-
-```math
-+X = \text{east}, \quad +Y = \text{north}, \quad +Z = \text{up}
-```
-
-Given GeoCalib's predicted gravity unit vector $`\mathbf{g} = (g_x, g_y, g_z)^\top`$ expressed in the vision camera frame, the camera's roll $`\rho`$ and pitch $`\beta`$ are derived analytically [7]:
-
-```math
-\rho = \operatorname{atan2}(-g_x,\ g_y)
-```
-
-```math
-\beta = \arcsin(g_z)
-```
-
-Assuming the camera's heading (yaw $`\psi`$) is aligned with world north ($`\psi = 0`$), the rotation matrix aligning the camera to the world coordinate frame is:
-
-```math
-\mathbf{R} = \mathbf{R}_z(\rho)\, \mathbf{R}_x\!\left(\beta + \frac{\pi}{2}\right) =
-\begin{bmatrix}
-\cos\rho & -\sin\rho \cos\beta' & \sin\rho \sin\beta' \\
-\sin\rho & \cos\rho \cos\beta' & -\cos\rho \sin\beta' \\
-0 & \sin\beta' & \cos\beta'
-\end{bmatrix},
-\qquad \beta' = \beta + \frac{\pi}{2}
-```
+Assuming the camera's heading (yaw) is aligned with world north (yaw = 0), the rotation aligning the camera to the world coordinate frame is a roll about the Z axis combined with a rotation of pitch + 90° about the X axis, as implemented in the exporter script below.
 
 ### Automated Ground Plane Estimation for Camera Height
 
-To match camera height ($`h`$) above the ground plane without manual picking, the input image is processed through Depth Pro or MoGe-3 to generate a dense metric point map $`\mathbf{P}_c`$ in camera view-space [14].
+To match camera height above the ground plane without manual picking, the input image is processed through Depth Pro or MoGe-3 to generate a dense metric point map in camera view-space [14].
 
-The points are rotated into world orientation using $`\mathbf{R}`$:
+The points are rotated into world orientation using this rotation.
 
-```math
-\mathbf{P}_w = \mathbf{R}\, \mathbf{P}_c
-```
+A RANSAC estimator isolates the dominant planar surface in the lower third of the scene point cloud [16]. The fitted plane's normal represents the upright ground normal, and the camera's metric elevation above the floor is the plane's distance from the camera.
 
-A RANSAC estimator isolates the dominant planar surface in the lower third of the scene point cloud [16]. The fitted plane equation satisfies:
-
-```math
-\mathbf{n}^\top \mathbf{X} + d = 0
-```
-
-where $`\mathbf{n} \approx (0, 0, 1)^\top`$ represents the upright ground normal. The camera's metric elevation above the floor is:
-
-```math
-h = \lvert d \rvert
-```
-
-This establishes the complete $`4 \times 4`$ camera transformation matrix $`\mathbf{T}`$:
-
-```math
-\mathbf{T} =
-\begin{bmatrix}
-\mathbf{R} & \mathbf{t} \\
-\mathbf{0}^\top & 1
-\end{bmatrix},
-\qquad \mathbf{t} = (0, 0, h)^\top
-```
+This establishes the complete 4×4 camera transformation matrix, combining the rotation with a translation that places the camera at this height.
 
 ### Automated fSpy JSON Exporter
 
@@ -427,17 +376,17 @@ While deep neural models remove the need for manual line alignment, they introdu
 
 ### Optical Centre Decentring and Cropped Plates
 
-Most single-view calibration architectures (including GeoCalib and Depth Pro) assume that the optical centre (principal point) is located at the centre of the image canvas ($`c_x = W/2,\ c_y = H/2`$) [7]. When an image has undergone off-centre cropping, digital panning, or asymmetric lens shifting, this assumption is violated [8].
+Most single-view calibration architectures (including GeoCalib and Depth Pro) assume that the optical centre (principal point) is located at the centre of the image canvas [7]. When an image has undergone off-centre cropping, digital panning, or asymmetric lens shifting, this assumption is violated [8].
 
-A decentred principal point creates an asymmetric perspective field, which models often misinterpret as camera pitch or roll [8]. In pipelines dealing with heavily cropped plates, AnyCalib or UniDepth should be used as an initial calibration stage, as their ray-direction formulations can solve for optical centre offsets ($`c_x, c_y`$) directly [8].
+A decentred principal point creates an asymmetric perspective field, which models often misinterpret as camera pitch or roll [8]. In pipelines dealing with heavily cropped plates, AnyCalib or UniDepth should be used as an initial calibration stage, as their ray-direction formulations can solve for horizontal and vertical optical centre offsets directly [8].
 
 ### Scale Ambiguity and Ground Plane Identification
 
 Monocular depth models estimate metric scale by learning typical physical sizes for familiar objects (such as vehicles, furniture, and people) [31]. In environments lacking standard semantic scale cues, such as aerial drone photography, extreme close-up macro shots, or abstract architectural scenes, the predicted metric scale can drift [35].
 
-While the camera's angular parameters (pitch, roll, and FoV) remain stable, the absolute camera height ($`h`$) may scale incorrectly [35].
+While the camera's angular parameters (pitch, roll, and FoV) remain stable, the absolute camera height may scale incorrectly [35].
 
-When processing imagery without recognisable scale anchors, pipelines should incorporate an interactive scale-adjustment factor or default to a standard standing eye-level prior ($`h \approx 1.65\ \text{m}`$) [35].
+When processing imagery without recognisable scale anchors, pipelines should incorporate an interactive scale-adjustment factor or default to a standard standing eye-level prior of about 1.65 m [35].
 
 ### Specular, Reflective, and Translucent Surfaces
 
@@ -451,7 +400,7 @@ In scenes dominated by reflections or transparency, camera matching should rely 
 
 Standard pinhole projection models struggle when applied to images with noticeable barrel or pincushion distortion [2]. If an image with barrel distortion is fed directly to a rectilinear solver, straight lines appear curved, leading to inaccurate FoV and pitch estimates [7].
 
-To handle distorted imagery, plates should first be processed through GeoCalib (using its `--camera_model simple_radial` mode) or AnyCalib (using `kb:4` or division models) to estimate distortion coefficients ($`k_1, k_2, \ldots`$) [7].
+To handle distorted imagery, plates should first be processed through GeoCalib (using its `--camera_model simple_radial` mode) or AnyCalib (using `kb:4` or division models) to estimate radial distortion coefficients [7].
 
 The plate can then be digitally undistorted before camera matching, or mapped directly to Blender Cycles' native Panoramic Fisheye camera model [7].
 
@@ -462,7 +411,7 @@ For visual effects artists, architectural visualisers, and general 3D practition
 - **Direct drop-in replacement for fSpy:** GeoCalib provides the most direct functional equivalent to fSpy [7]. It infers camera roll, pitch, focal length, and radial distortion across indoor, outdoor, natural, and architectural scenes without manual vanishing line input [7]. Its fast inference speed (_[missing]_), low VRAM footprint (_[missing]_), and Apache-2.0 licence make it well-suited for interactive tools and add-on development [7].
 - **Joint scene reconstruction and camera matching:** Microsoft's MoGe-3 is the preferred solution when both camera matching and proxy geometry generation are required [14]. It recovers fine geometric details, surface normal maps, and camera FoV within a single forward pass, exporting textured `.glb` assets that load directly into Blender [14].
 - **High-resolution plates and detail preservation:** Apple Depth Pro provides the highest edge definition and boundary sharpness for high-resolution images, generating _[missing]_ metric depth maps and horizontal focal lengths in _[missing]_ [28]. It is particularly effective for portraiture, product rendering, and scenes with fine silhouette detail [28].
-- **The composite production pipeline:** The most robust automated solution pairs **GeoCalib** with **MoGe-3** or **Depth Pro** [7]. In this configuration, GeoCalib determines camera orientation (pitch and roll) and field of view, while the dense depth model reconstructs the visible environment and establishes camera height ($`h`$) via automated ground-plane fitting [7]. This two-stage pipeline eliminates manual vanishing-point placement while delivering a fully calibrated camera and matching proxy scene in Blender [13].
+- **The composite production pipeline:** The most robust automated solution pairs **GeoCalib** with **MoGe-3** or **Depth Pro** [7]. In this configuration, GeoCalib determines camera orientation (pitch and roll) and field of view, while the dense depth model reconstructs the visible environment and establishes camera height via automated ground-plane fitting [7]. This two-stage pipeline eliminates manual vanishing-point placement while delivering a fully calibrated camera and matching proxy scene in Blender [13].
 
 ## Works Cited
 

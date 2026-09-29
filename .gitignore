@@ -1,0 +1,12 @@
+# Local agent workspace, virtual environments and caches
+.venv/
+.agent-local/
+.cache/
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Build output
+dist/

@@ -1,0 +1,23 @@
+schema_version = "1.0.0"
+
+id = "ai_camera_match"
+version = "1.0.0"
+name = "AI Camera Match"
+tagline = "Match a camera to a single photo with GeoCalib and MoGe"
+maintainer = "Parth Mital"
+type = "add-on"
+website = "https://github.com/parthmital/Automated-AI-Camera-Matching"
+
+tags = ["Camera", "Import-Export"]
+
+blender_version_min = "4.2.0"
+
+license = ["SPDX:GPL-3.0-or-later"]
+copyright = ["2026 Parth Mital"]
+
+[permissions]
+network = "Install PyTorch, GeoCalib, MoGe and download model weights"
+files = "Read photos, write the solver environment, plates and meshes"
+
+[build]
+paths_exclude_pattern = ["__pycache__/", "*.pyc", "/.git/"]

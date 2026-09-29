@@ -1,0 +1,5 @@
+# Installed with --no-deps: their declared dependencies pull in opencv-python (GUI build),
+# Gradio and FlexGEMM, none of which inference with GeoCalib or MoGe-2 needs.
+# MoGe-3 checkpoints additionally need FlexGEMM: https://github.com/JeffreyXiang/FlexGEMM
+geocalib @ https://github.com/cvg/GeoCalib/archive/97b8968e7798a66bf04fcf791fb535624241bda7.zip
+moge @ https://github.com/microsoft/MoGe/archive/74fbce054ebed49800de42d0ad0e83495065719a.zip
